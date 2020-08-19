@@ -1,5 +1,11 @@
 ---
 title: "COVID-19 Project"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+
 author: "Xinxin Luo"
 date: "4/18/2020"
 output:
