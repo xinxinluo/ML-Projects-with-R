@@ -1,0 +1,279 @@
+---
+title: "DA5020.Practium1.Luo.Rmd"
+author: "Xin Lin, Xinxin Luo, William Morrison"
+output:
+  html_document
+---
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(XML)
+library(RCurl)
+library(lubridate)
+library(knitr)
+```
+
+## Question 1
+Load the XML file into a browser or text editing tool and inspect it. Explore the data set as you see fit and that allows you to get a sense of the data and get comfortable with it.
+```{r}
+#Loading the dataset
+xmldata<-getURL("https://da5020.weebly.com/uploads/8/6/5/9/8659576/pubmedsample.jun18.xml")
+xmldf<-xmlToDataFrame(xmldata)
+
+# Convert data into tree
+parsed_data<-xmlTreeParse(xmldata, useInternalNodes = TRUE)
+medRoot<-xmlRoot(parsed_data)
+```
+
+## Question 2
+Load the data into R and create two linked tibbles: one for publication and one for journal. 
+Use ISSN as the key to link them. Only load the following information into the publication tibble: PMID (primary key for publication), ISSN and publication year (foreign key for journal), date completed (as one date field), date revised (as one date field), number of authors (derived/calculated field from the authors), publication type, title of article.
+Load this information into the journal tibble: ISSN (primary key), medium (from CitedMedium attribute), publication year (primary key), publication season, language, and journal title. In cases where there are multiple languages for a publication, pick the first language. Same for publication type: pick the first one. 
+The primary key for journal is (ISSN, publication year). Also, exclude any journals that do not have an ISSN as the primary key cannot be empty.
+```{r}
+# Parsing information for tibbles
+# PMID number
+parsePMID <- function(rNode) {
+  pmID <- xmlValue(rNode[["MedlineCitation"]][["PMID"]][["text"]])
+  return(pmID)
+}
+
+# ISSN number
+parseISSN <- function(rNode) {
+  issn <- xmlValue(rNode[["MedlineCitation"]][["Article"]][["Journal"]][["ISSN"]][["text"]])
+  return(issn)
+}
+
+# Publication year
+parsePubYear <- function(rNode) {
+  pubYear <- xmlValue(rNode[["MedlineCitation"]][["Article"]][["Journal"]][["JournalIssue"]][["PubDate"]][["Year"]][["text"]])
+  return(pubYear)
+}
+
+# Date completed
+parseCompDate <- function(rNode) {
+  compDate <- xmlValue(rNode[["MedlineCitation"]][["DateCompleted"]])
+  return(compDate)
+}
+
+# Date revised
+parseRevDate <- function(rNode) {
+  revDate <- xmlValue(rNode[["MedlineCitation"]][["DateRevised"]])
+  return(revDate)
+}
+
+# Number of authors
+parseNumAuth <- function(rNode) {
+  authors <- xmlSize(rNode[["MedlineCitation"]][["Article"]][["AuthorList"]])
+  numAuthors <- as.numeric(authors)
+  return(numAuthors)
+}
+
+# Publication Type
+parsePubType <- function(rNode) {
+  pubType <- xmlValue(rNode[["MedlineCitation"]][["Article"]][["PublicationTypeList"]][["PublicationType"]])
+  return(pubType)
+}
+
+# Article Title
+parseArtTitle <- function(rNode) {
+  title <- xmlValue(rNode[["MedlineCitation"]][["Article"]][["ArticleTitle"]][["text"]])
+  return(title)
+}
+
+# Cited Medium
+Medium <- xpathSApply(parsed_data, "//PubmedArticle/MedlineCitation", function(x) {
+  if (xpathSApply(x, "boolean(./Article/Journal/JournalIssue)")) {
+    xpathSApply(x, "./Article/Journal/JournalIssue", xmlGetAttr, "CitedMedium")
+  }
+  else {
+    NA
+  }
+})
+
+# Publication Season
+parsePubSeason <- function(rNode) {
+  pubSeason <- xmlValue(rNode[["MedlineCitation"]][["Article"]][["Journal"]][["JournalIssue"]][["PubDate"]][["Season"]][["text"]])
+  return(pubSeason)
+}
+
+# Lanuage
+parseLang <- function(rNode) {
+  lang <- xmlValue(rNode[["MedlineCitation"]][["Article"]][["Language"]])
+  return(lang)
+}
+
+# Journal Title
+parseJourTitle <- function(rNode) {
+  title <- xmlValue(rNode[["MedlineCitation"]][["Article"]][["Journal"]][["Title"]][["text"]])
+  return(title)
+}
+
+# Construct tibbles####
+# Initialize tibbles
+publication <- tibble(pmID = character(),
+                      issn = character(),
+                      pubYear = character(),
+                      dateComp = date(),
+                      dateRevi = date(),
+                      authors = numeric(),
+                      pubType = character(),
+                      title = character())
+journal <- tibble(issn = character(),
+                  medium = character(),
+                  pubYear = date(),
+                  pubSeason = character(),
+                  lang = character(),
+                  jourTitle = character())
+
+# Loop through the tree to get information
+numNodes <- xmlSize(medRoot)
+
+for (i in 1:numNodes)
+{
+  # turn off parse warnings
+  options(warn = -1)
+  
+  # work on the "ith" listing
+  currListing <- medRoot[[i]]
+  
+  # parse auction ID and add as PK for listing tibble
+  pk <- parsePMID(currListing)
+  # ensure that PK is unique, i.e., is not already in listing tibble
+  if (nrow(publication[publication$pmID == pk,]) == 1)
+  {
+    # it already exists, so somehow the listing is already there so skip everything below
+    # and continue with the next iteration of the loop
+    print (paste("pmID already exists:", pk), quote = FALSE)
+    next
+  }
+  
+  # add data to publication tibble
+  publication[i,]$pmID <- pk
+  publication[i,]$issn <- parseISSN(currListing)
+  publication[i,]$pubYear <- parsePubYear(currListing)
+  publication[i,]$dateComp <- parseCompDate(currListing)
+  publication[i,]$dateRevi <- parseRevDate(currListing)
+  publication[i,]$authors <- parseNumAuth(currListing)
+  publication[i,]$pubType <- parsePubType(currListing)
+  publication[i,]$title <- parseArtTitle(currListing)
+  
+  # add data to journal tibble
+  journal[i,]$issn <- parseISSN(currListing)
+  journal[i,]$medium <- Medium[i]
+  journal[i,]$pubYear <- parsePubYear(currListing)
+  journal[i,]$pubSeason <- parsePubSeason(currListing)
+  journal[i,]$lang <- parseLang(currListing)
+  journal[i,]$jourTitle <- parseJourTitle(currListing)
+}
+
+# Change the class to "Dates"
+publication$dateComp <- ymd(publication$dateComp, tz = "UTC")
+publication$dateRevi <- ymd(publication$dateRevi, tz = "UTC")
+
+# Extract valid records
+journal <- filter(journal, issn != "NA", pubYear != "NA")
+publication <- filter(publication, issn != "NA", pubYear != "NA")
+journal <- unique(journal)
+
+# Display the publication and journal tibbles
+kable(publication)
+kable(journal)
+```
+
+## Question 3
+Create a line graph of the number of publications per year from 2000 to 2015.
+```{r eval=TRUE}
+# find number of publications per year from 2000 to 2015
+pubsPerYear <- publication %>%
+  filter(pubYear >= 2000, pubYear <= 2015) %>%
+  count(pubYear)
+
+# Plot the results  
+ggplot(data = pubsPerYear, aes(x = pubYear, y = n)) +
+  geom_point()
+plot(pubsPerYear$pubYear, type = "o", xlab = "Number of Publications", ylab = "Publication Year")
+```
+
+## Question 4
+Find the articles that had fewer than three authors and list the article, journal, and publication date.
+```{r eval=TRUE}
+# find artciles with 1-3 authors
+threeOrLessAuthors <- publication %>%
+  inner_join(journal, by = c("issn", "pubYear")) %>%
+  filter(authors < 4, authors > 0) %>% 
+  select(title, jourTitle, dateComp)
+
+# find articles with 0 author
+zeroAuthors <- publication %>%
+  inner_join(journal, by = c("issn", "pubYear")) %>%
+  filter(authors == 0) %>%
+  select(title, jourTitle, dateComp)
+
+# print the results
+kable(threeOrLessAuthors)
+kable(zeroAuthors)
+```
+In results, there are 78 articles with 1 to 3 authors, 92 with "0" to 3 authors.
+
+## Question 5
+Find the average number of authors for articles. Display a single number.
+```{r eval=TRUE}
+mean(publication$authors)
+```
+The average number of authors for articles is almost 10.
+
+## Question 6
+What is the average time period (in days) between date completed and date revised. Display the time elapsed in days. Only consider cases where the difference is a positive number.
+```{r eval=TRUE}
+# Select articles that has positive difference between date completed and date revised 
+timePeriod <- publication %>%
+  filter(dateComp < dateRevi) %>%
+  select(issn,title, dateComp, dateRevi)
+
+# Initialize the parameters
+timeRow <- nrow(timePeriod)
+timeInterval <- NA * timeRow
+timePeriod["timeElapsed"] <- NA
+
+# Loop through all rows
+for (i in 1:timeRow) {
+  timeInterval[i] <- interval(timePeriod$dateComp[i], timePeriod$dateRevi[i])
+  timePeriod$timeElapsed[i] <- as.duration(timeInterval[i]) / ddays(1)
+}
+
+# display the table
+kable(timePeriod)
+
+# average time period
+mean(timePeriod$timeElapsed)
+```
+The average time period between date completed and date revised is 3796 days.
+
+## Question 7
+Which articles published in PubMed were not written in English? Only consider the first language of publication.
+```{r eval=TRUE}
+nonEng <- journal %>%
+  filter(lang != "eng") %>%
+  left_join(publication, by = c("issn", "pubYear")) %>%
+  select(jourTitle, title, lang)
+kable(nonEng)
+```
+The table above listed out the articles published in PubMed were not written in English.
+
+## Question 8
+Using the XML data (not the tibbles created above), find the articles containing any of the words "drug resistance" or "virus"  in any capitalization in the title. Note that drug resistance could be spelled as "drug resistance" or "drug-resistance" or "drug resistant" or "drug resistent" -- use regular expressions to deal with the variations.
+```{r eval=TRUE}
+med01 <- readLines("http://da5020.weebly.com/uploads/8/6/5/9/8659576/pubmedsample.jun18.xml")
+
+drug <- regexpr("<ArticleTitle>(.*)[D|d]rug(.*)[R|r]esist(.*?)</ArticleTitle>", med01)#regular expression that finds titles with variations on the term "drug resistance".
+d <- regmatches(med01, drug)#saves matched terms as a vector.
+(drugTitles <- gsub("<ArticleTitle>|</ArticleTitle>", "", d))#removes the "<ArticleTitle>" tags so only the title is printed.
+
+virus <- regexpr("<ArticleTitle>(.*)[V|v]irus(.*)</ArticleTitle>", med01)#regular expression that finds titles with variations on the term "virus".
+v <- regmatches(med01, virus)#saves matched terms as a vector.
+(virusTitles <- gsub("<ArticleTitle>|</ArticleTitle>", "", v))#removes the "<ArticleTitle>" tags so only the title is printed.
+```
+The listed 3 articles containing any of the words "drug resistance" or "virus".
