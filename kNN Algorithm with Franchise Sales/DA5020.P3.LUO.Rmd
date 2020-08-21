@@ -1,0 +1,150 @@
+---
+title: "DA5020.P3.LUO"
+author: "Xinxin Luo"
+date: "4/15/2020"
+output: pdf_document
+---
+##Problem 1 (95 Points)
+1.1:(0 Pts) Load the data set on franchise sales. The variables in the data set are: NetSales = net sales in $1000s for a franchise; StoreSize = size of store in 1000s square-feet; InvValue = inventory value in $1000s; AdvBudget = advertising budget in $1000s; DistrictSize = number of households in sales district in 1000s ; NumComp = number of competing stores in sales district. Do you detect any multi-collinearity that would affect the construction of a multiple regression model?
+
+```{r}
+sales <- read.csv("franchisesales.csv")
+summary(sales)
+plot(sales)
+cor(sales)
+
+#load library psych
+
+library(psych)
+pairs.panels(sales)
+```
+```{r}
+# cor() function returns a full correlation matrix between all variables from the data frame. 
+# comment: When x variables in the correlation matrix show linear relationships, there is an indication that those variables exhibit multicollinearity. From the correlation matrix below, we can see that almost all x variables have strong influence on each other, thus affecting the construction of the regression model. 
+```
+
+1.2: (20 Pts) Normalize all columns, except NetSales, using z-score standardization.
+```{r}
+# Z score normalization for every feature except first column NetSales
+sales_z<-scale(sales[,2:6], center = TRUE, scale = TRUE)
+
+# check standardization
+summary(sales_z)
+```
+
+1.3: (50 Pts) Implement the k-NN algorithm in R (do not use an implementation of k-NN from a package); write a function called kNN-predict(data,y,x,k) that takes a data set of predictor variables, a set of NetSales values, a new set of values for the variables, and a k and returns a prediction. To predict a continuous variable you need to calculate the distances of x to all observations in data, then take the k closest cases and average the NetSales values for those cases. That average is your prediction.
+```{r}
+# write a function called kNN-predicat, whereas data=set of predictor variables, y=Netsales values, x = new set of values for the variables, and a k value. 
+kNN_predict <- function(data,y,x,k){
+  # 1. Find neighbors
+  n <- nrow(data)
+  ds <- numeric(n)
+  for (i in 1:n) {
+    ds[i] <- sqrt(sum(data[i,]-x)^2) # or can write as dist(ds, method="euclidean")
+    
+  # 2. Order the k neighbors
+  ordered.neighbors <- order(ds)
+  k.closest <- ordered.neighbors[1:k]
+  
+  # 3. Find the average of the NetSales Values
+  return(mean(y[k.closest]))
+  }
+}
+```
+
+1.4: (10 Pts) Use your algorithm with a k=3 to predict net sales of a store with the following values for the variables in order: (4.2, 601, 7.8, 14.2, 6). Compare that prediction to the one you obtained in Assignment 10.
+```{r}
+# create a new item
+new <- data.frame(StoreSize=4.2, InvValue=601, AdvBudget=7.8, DistrictSize=14.2, NumComp=6)
+
+# Z-score standardization function
+normalize <- function(x, mean, sd) {
+return ((x - mean) / sd) }
+
+# load necessary library
+library(tibble)
+mean <- as_tibble(lapply(sales[,-1], mean))
+sd <- as_tibble(lapply(sales[,-1], sd))
+  
+# Normalize each new case using z-score and whole data's mean and sd, as new cases contains 0 values.
+new.n <- mapply(normalize,new,mean,sd)
+
+# Make Prediction
+new_predict <- kNN_predict(sales_z,sales$NetSales, new.n, 3)
+
+new_predict
+
+# Comment: the prediction use kNN_predict is 228.33, compared to 405.02 from Assignment 10. 
+```
+
+1.5: (15 Pts) Calculate the mean square error (MSE) for the kNN by predicting each actual value in the data set and comparing it to the actual observation. Compare the MSE to the MSE you calculated in Assignment 10 and comment on the difference. Which model is better?
+```{r}
+# find out number of rows in sales dataset
+n <- nrow(sales)
+
+# predict each NetSales value using kNN by creating a new column in the dataset
+sales$predicted <- numeric(n) 
+for (i in 1:n) {
+  sales$predicted[i] <- kNN_predict(sales_z,sales$NetSales, sales_z[i,], 3)
+}
+
+# write MSE function
+mse <- function(x,y){
+  return(mean((x-y)^2))
+}
+
+# MSE for using the kNN_predict function formulated. 
+mse(sales$predicted,sales$NetSales)
+
+# Comment: the MSE is 39274, which is quite different from Assignment 10's MSE = 242.27. 
+```
+
+##Problem 2 (15 Points)
+2.1: (10 Pts) Determine an optimal k by trying all values from 1 through 7 for your own k-NN algorithm implementation against the cases in the entire data set (if we had a larger data set, we would split it into training and validation data to avoid overfitting). What is the optimal k, i.e., the k that results in the best accuracy as measured by smallest MSE?
+```{r}
+# create 7 predicted columns for k values from 1 through 7
+predict_index <- c("k_1","k_2","k_3","k_4","k_5","k_6","k_7")
+
+for (s in predict_index) {
+  sales[,s] <- 0}
+
+# create separate dataframe to store all these values
+sales2 <- sales[,c(8:14)]
+
+# predicted NetSales values for k from 1 through 7 
+for (i in 1:7){
+    for (j in 1:n) {
+  sales2[j,i] <- kNN_predict(sales_z,sales$NetSales, sales_z[j,], i)
+  
+  }
+}
+```
+
+```{r}
+# calculate MSE for NetSales with k value varies from 1 through 7 
+mse_values <- numeric(7)
+
+for (i in 1:7){
+  mse_values[i]<- mse(sales2[,i],sales$NetSales)
+}
+
+# find out the optiomal value for k
+
+cat("The optimal k value for my own k-NN algorithm implementation is", which(mse_values==min(mse_values)), ", which is", min(mse_values), ".")
+```
+
+2.2: (5 Pts) Create a plot of k (x-axis) versus MSE using ggplot.
+```{r}
+# load library
+library(ggplot2)
+
+# create k vector
+k <- c(1:7)
+
+# create a ggplot
+ggplot() + geom_bar(aes(k, mse_values), stat="identity", position = "dodge",fill="blue") 
+
+
+
+```
+
